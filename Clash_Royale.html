@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Mini Royale: Active Brawler</title>
+    <style>
+        :root { --elixir: #f0f; --hp-player: #2ecc71; --hp-enemy: #e74c3c; --selected: #ffeb3b; }
+        body { margin: 0; background: #1a1a1a; color: white; font-family: 'Arial', sans-serif; display: flex; flex-direction: column; align-items: center; }
+        
+        .screen { position: absolute; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #2c3e50; z-index: 100; text-align: center; }
+        .hidden { display: none !important; }
+
+        #game-container { 
+            position: relative; width: 360px; height: 550px; border: 8px solid #333; 
+            overflow: hidden; margin-top: 10px; cursor: crosshair; 
+        }
+        .hog-mountain { background: #8b4513; }
+        .jungle { background: #1b5e20; }
+        .electro { background: #283593; }
+        .spooky { background: #4a148c; }
+
+        .entity { position: absolute; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; z-index: 10; pointer-events: none; }
+        /* Larger Brawler Visuals */
+        .brawler-unit { font-size: 26px; width: 42px; height: 42px; font-weight: bold; }
+        
+        .hp-bar { position: absolute; top: -12px; width: 30px; height: 4px; background: #000; border: 1px solid #fff; }
+        .hp-fill { height: 100%; transition: width 0.1s; }
+        
+        .tower { width: 45px; height: 45px; background: #7f8c8d; border: 3px solid #222; border-radius: 5px; z-index: 5; }
+        .king-tower { width: 55px; height: 55px; background: #34495e; }
+
+        .explosion { position: absolute; width: 80px; height: 80px; background: radial-gradient(circle, #4caf50, transparent); border-radius: 50%; transform: translate(-25px, -25px); z-index: 20; animation: burst 0.4s ease-out forwards; }
+        @keyframes burst { 0% { transform: scale(0.1); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
+
+        #ui { width: 360px; background: #222; padding: 10px; border: 4px solid #444; box-sizing: border-box; }
+        .deck-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 5px; }
+        .card { background: #eee; color: #111; padding: 5px; font-size: 10px; text-align: center; cursor: pointer; border-radius: 4px; font-weight: bold; border: 2px solid transparent; }
+        .card.active-selection { border-color: var(--selected); background: #fff; }
+        button { padding: 12px 24px; font-weight: bold; cursor: pointer; background: #e67e22; border: none; color: white; border-radius: 5px; margin: 10px; width: 220px;}
+    </style>
+</head>
+<body>
+
+    <audio id="bg-music" loop>
+        <source src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" type="audio/mpeg">
+    </audio>
+
+    <div id="menu" class="screen">
+        <h1>MINI ROYALE</h1>
+        <div id="status">Ready for Battle</div>
+        <select id="arena-choice" style="padding: 5px; margin: 10px;">
+            <option value="hog-mountain">Hog Mountain</option>
+            <option value="jungle">Jungle Arena</option>
+            <option value="electro">Electro Valley</option>
+            <option value="spooky">Spooky Town</option>
+        </select><br>
+        <button onclick="startGame('cpu')">BATTLE CPU</button><br>
+        <button onclick="sendGmailInvite()" style="background: #db4437;">INVITE PLAYER 2 (GMAIL)</button>
+    </div>
+
+    <div id="game-container" onclick="handleArenaClick(event)"></div>
+
+    <div id="ui">
+        <div id="instruction" style="color:var(--selected); font-size:12px; text-align:center; height:15px; font-weight:bold;">BRAWLER RELEASED</div>
+        <div id="elixir-stat">Elixir: 0/10</div>
+        <div style="width:100%; height:10px; background:#444;"><div id="elixir-bar" style="width:0%; height:100%; background:var(--elixir);"></div></div>
+        <div class="deck-grid" id="player-deck"></div>
+    </div>
+
+<script>
+    const CARDS = {
+        'Skarmy': { cost: 3, hp: 60, dmg: 20, icon: '💀', speed: 2, range: 20, spawnCount: 6, spawnType: 'cluster' },
+        'Mega Knight': { cost: 7, hp: 2500, dmg: 150, icon: '🛡️', speed: 1, range: 35 },
+        'Hog Rider': { cost: 4, hp: 1400, dmg: 250, icon: '🐗', speed: 3.5, range: 30, targetsOnlyBuildings: true },
+        'The Log': { cost: 7, hp: 999, dmg: 400, icon: '🪵', speed: 5, range: 400, type: 'spell' },
+        'Goblin Barrel': { cost: 3, dmg: 100, icon: '🎭', type: 'spell', special: 'spawnGoblins' },
+        'Wizard': { cost: 5, hp: 650, dmg: 140, icon: '🔥', speed: 1.5, range: 120, isSplash: true },
+        'Witch': { cost: 5, hp: 750, dmg: 90, icon: '🧙‍♀️', speed: 1.5, range: 90, isSplash: true, special: 'skeleton' },
+        'Mini P.E.K.K.A': { cost: 4, hp: 1100, dmg: 600, icon: '🤖', speed: 2.5, range: 30 },
+        'P.E.K.K.A': { cost: 7, hp: 3200, dmg: 900, icon: '🦾', speed: 1, range: 35 },
+        'Goblin Cage': { cost: 4, hp: 800, dmg: 0, icon: '🛖', speed: 0, range: 0, type: 'building', isBuilding: true, onDeath: 'spawnBrawler' },
+        'Royal Recruits': { cost: 7, hp: 700, dmg: 80, icon: '💂', speed: 1, range: 30, spawnCount: 7, spawnType: 'row' },
+        'Fireball': { cost: 4, dmg: 700, icon: '☄️', type: 'spell' },
+        'Goblin': { hp: 160, dmg: 60, icon: '👺', speed: 3, range: 20 },
+        'Brawler': { hp: 1200, dmg: 220, icon: '👹', speed: 2.8, range: 35, cssClass: 'brawler-unit' }
+    };
+
+    let elixir = 0, cpuElixir = 0, entities = [], selectedCard = null;
+    let gameMode = 'cpu';
+    const container = document.getElementById('game-container');
+    const music = document.getElementById('bg-music');
+
+    window.onload = () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('gameId')) {
+            document.getElementById('status').innerText = "JOINED 2-PLAYER SESSION";
+            startGame('pvp');
+        }
+    };
+
+    function sendGmailInvite() {
+        const gameId = Math.random().toString(36).substring(7);
+        const inviteLink = window.location.origin + window.location.pathname + '?gameId=' + gameId;
+        const subject = encodeURIComponent("Challenge: Join my Mini Royale Battle!");
+        const body = encodeURIComponent("Click this link to join my game session: " + inviteLink);
+        window.open(`https://mail.google.com/mail/?view=cm&fs=1&su=${subject}&body=${body}`, '_blank');
+    }
+
+    function startGame(mode) {
+        gameMode = mode;
+        document.getElementById('menu').classList.add('hidden');
+        container.className = document.getElementById('arena-choice').value;
+        music.play();
+        spawnTowers();
+        renderDeck();
+        setInterval(updateLogic, 100);
+        setInterval(() => { if(elixir < 10) elixir++; if(cpuElixir < 10) cpuElixir++; updateUI(); }, 2000);
+        setInterval(witchSpawnCycle, 15000);
+        if(gameMode === 'cpu') setInterval(cpuTurn, 5000);
+    }
+
+    function renderDeck() {
+        const grid = document.getElementById('player-deck');
+        const hiddenUnits = ['Goblin', 'Brawler'];
+        Object.keys(CARDS).forEach(name => {
+            if (hiddenUnits.includes(name)) return;
+            const btn = document.createElement('div');
+            btn.className = 'card'; btn.id = `card-${name}`;
+            btn.innerHTML = `${CARDS[name].icon}<br>${name}`;
+            btn.onclick = (e) => { e.stopPropagation(); selectCard(name); };
+            grid.appendChild(btn);
+        });
+    }
+
+    function selectCard(name) {
+        if (elixir < CARDS[name].cost) return;
+        selectedCard = name;
+        document.querySelectorAll('.card').forEach(c => c.classList.remove('active-selection'));
+        document.getElementById(`card-${name}`).classList.add('active-selection');
+    }
+
+    function handleArenaClick(event) {
+        if (!selectedCard) return;
+        const rect = container.getBoundingClientRect();
+        const x = event.clientX - rect.left - 15, y = event.clientY - rect.top - 15;
+        if (CARDS[selectedCard].type === 'spell') castSpell(selectedCard, x, y, 'player');
+        else { if (y < 270) return; handleMultiSpawn(selectedCard, x, y, 'player'); }
+        selectedCard = null;
+        document.querySelectorAll('.card').forEach(c => c.classList.remove('active-selection'));
+    }
+
+    function castSpell(name, x, y, team) {
+        const stats = CARDS[name];
+        if (team === 'player') { elixir -= stats.cost; updateUI(); }
+        const explode = document.createElement('div');
+        explode.className = 'explosion'; explode.style.left = x + 'px'; explode.style.top = y + 'px';
+        container.appendChild(explode);
+        setTimeout(() => explode.remove(), 400);
+
+        entities.forEach(target => {
+            if (target.team !== team && target.hp > 0) {
+                if (Math.hypot(x - target.x, y - target.y) < 60) {
+                    target.hp -= stats.dmg;
+                    const fill = target.el.querySelector('.hp-fill');
+                    if (fill) fill.style.width = (target.hp / target.maxHp * 100) + '%';
+                }
+            }
+        });
+        if (stats.special === 'spawnGoblins') {
+            for(let i=0; i<3; i++) deploy('Goblin', x + (Math.random()-0.5)*30, y + (Math.random()-0.5)*30, team);
+        }
+    }
+
+    function handleMultiSpawn(name, x, y, team, isFree = false) {
+        const stats = CARDS[name];
+        if (team === 'player' && !isFree) { elixir -= stats.cost; updateUI(); }
+        const count = stats.spawnCount || 1;
+        for (let i = 0; i < count; i++) {
+            let spawnX = x, spawnY = y;
+            if (stats.spawnType === 'row') { spawnX = 30 + (i * 50); spawnY = y; }
+            else { spawnX = x + (Math.random()-0.5)*40; spawnY = y + (Math.random()-0.5)*40; }
+            deploy(name, spawnX, spawnY, team);
+        }
+    }
+
+    function deploy(name, x, y, team) {
+        const stats = CARDS[name];
+        const div = document.createElement('div');
+        div.className = `entity ${stats.cssClass || ''}`;
+        div.style.left = x + 'px'; div.style.top = y + 'px';
+        div.innerHTML = `<div class="hp-bar"><div class="hp-fill" style="background:${team==='player'?'var(--hp-player)':'var(--hp-enemy)'}; width:100%"></div></div>${stats.icon}`;
+        container.appendChild(div);
+        entities.push({ ...stats, el: div, maxHp: stats.hp, team: team, x: x, y: y });
+    }
+
+    function cpuTurn() {
+        const names = Object.keys(CARDS).filter(n => !['Goblin', 'Brawler'].includes(n));
+        const rand = names[Math.floor(Math.random() * names.length)];
+        const stats = CARDS[rand];
+        if (cpuElixir >= stats.cost) {
+            cpuElixir -= stats.cost;
+            if (stats.type === 'spell') castSpell(rand, 180 + (Math.random()-0.5)*100, 400 + (Math.random()-0.5)*50, 'enemy');
+            else handleMultiSpawn(rand, Math.random()*300, 100, 'enemy', true);
+        }
+    }
+
+    function updateLogic() {
+        entities.forEach(u => {
+            if (u.hp <= 0) return;
+            let target = null, minDist = 9999;
+            entities.forEach(enemy => {
+                if (enemy.team !== u.team && enemy.hp > 0) {
+                    if (u.targetsOnlyBuildings && !enemy.isBuilding) return;
+                    let d = Math.hypot(u.x - enemy.x, u.y - enemy.y);
+                    if (d < minDist) { minDist = d; target = enemy; }
+                }
+            });
+            if (target) {
+                if (minDist > u.range) {
+                    if (u.speed > 0) {
+                        let angle = Math.atan2(target.y - u.y, target.x - u.x);
+                        u.x += Math.cos(angle) * u.speed; u.y += Math.sin(angle) * u.speed;
+                    }
+                } else {
+                    const damageDeal = u.dmg / 10;
+                    if (u.isSplash) {
+                        entities.forEach(e => {
+                            if (e.team !== u.team && Math.hypot(target.x - e.x, target.y - e.y) < 50) {
+                                e.hp -= damageDeal;
+                                const fill = e.el.querySelector('.hp-fill');
+                                if (fill) fill.style.width = (e.hp / e.maxHp * 100) + '%';
+                            }
+                        });
+                    } else {
+                        target.hp -= damageDeal;
+                        const fill = target.el.querySelector('.hp-fill');
+                        if (fill) fill.style.width = (target.hp / target.maxHp * 100) + '%';
+                    }
+                }
+            }
+            u.el.style.left = u.x + 'px'; u.el.style.top = u.y + 'px';
+        });
+        
+        entities = entities.filter(u => {
+            if (u.hp <= 0) {
+                if (u.onDeath === 'spawnBrawler') deploy('Brawler', u.x, u.y, u.team);
+                u.el.remove();
+                if (u.isKing) { alert(u.team === 'player' ? "DEFEAT" : "VICTORY"); location.reload(); }
+                return false;
+            }
+            return true;
+        });
+    }
+
+    function spawnTowers() {
+        const tPos = [{x:50,y:70,team:'enemy',hp:2500},{x:260,y:70,team:'enemy',hp:2500},{x:155,y:20,team:'enemy',hp:4500,king:true},
+                      {x:50,y:430,team:'player',hp:2500},{x:260,y:430,team:'player',hp:2500},{x:155,y:480,team:'player',hp:4500,king:true}];
+        tPos.forEach(p => {
+            const div = document.createElement('div');
+            div.className = `entity tower ${p.king?'king-tower' : ''}`;
+            div.style.left = p.x+'px'; div.style.top = p.y+'px';
+            div.innerHTML = `<div class="hp-bar"><div class="hp-fill" style="background:${p.team==='player'?'var(--hp-player)':'var(--hp-enemy)'}; width:100%"></div></div>🏰`;
+            container.appendChild(div);
+            entities.push({ el: div, hp: p.hp, maxHp: p.hp, team: p.team, x: p.x, y: p.y, range: 150, dmg: 60, isBuilding: true, isKing: p.king });
+        });
+    }
+
+    function witchSpawnCycle() {
+        entities.forEach(u => { if (u.special === 'skeleton' && u.hp > 0) handleMultiSpawn('Skarmy', u.x, u.y+20, u.team, true); });
+    }
+
+    function updateUI() {
+        document.getElementById('elixir-stat').innerText = `Elixir: ${elixir}/10`;
+        document.getElementById('elixir-bar').style.width = (elixir * 10) + '%';
+    }
+</script>
+</body>
+</html>
