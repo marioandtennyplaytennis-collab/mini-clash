@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Mini Royale: Active Brawler</title>
+    <title>Mini Royale: Live Multiplayer</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         :root { --elixir: #f0f; --hp-player: #2ecc71; --hp-enemy: #e74c3c; --selected: #ffeb3b; }
         body { margin: 0; background: #1a1a1a; color: white; font-family: 'Arial', sans-serif; display: flex; flex-direction: column; align-items: center; }
@@ -20,9 +21,7 @@
         .spooky { background: #4a148c; }
 
         .entity { position: absolute; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; z-index: 10; pointer-events: none; }
-        /* Larger Brawler Visuals */
         .brawler-unit { font-size: 26px; width: 42px; height: 42px; font-weight: bold; }
-        
         .hp-bar { position: absolute; top: -12px; width: 30px; height: 4px; background: #000; border: 1px solid #fff; }
         .hp-fill { height: 100%; transition: width 0.1s; }
         
@@ -54,14 +53,14 @@
             <option value="electro">Electro Valley</option>
             <option value="spooky">Spooky Town</option>
         </select><br>
-        <button onclick="startGame('cpu')">BATTLE CPU</button><br>
-        <button onclick="sendGmailInvite()" style="background: #db4437;">INVITE PLAYER 2 (GMAIL)</button>
+        <button id="cpu-btn" onclick="startGame('cpu')">BATTLE CPU</button><br>
+        <button id="invite-btn" onclick="sendGmailInvite()" style="background: #db4437;">INVITE PLAYER 2 (GMAIL)</button>
     </div>
 
     <div id="game-container" onclick="handleArenaClick(event)"></div>
 
     <div id="ui">
-        <div id="instruction" style="color:var(--selected); font-size:12px; text-align:center; height:15px; font-weight:bold;">BRAWLER RELEASED</div>
+        <div id="instruction" style="color:var(--selected); font-size:12px; text-align:center; height:15px; font-weight:bold;">LIVE MULTIPLAYER</div>
         <div id="elixir-stat">Elixir: 0/10</div>
         <div style="width:100%; height:10px; background:#444;"><div id="elixir-bar" style="width:0%; height:100%; background:var(--elixir);"></div></div>
         <div class="deck-grid" id="player-deck"></div>
@@ -86,24 +85,57 @@
     };
 
     let elixir = 0, cpuElixir = 0, entities = [], selectedCard = null;
-    let gameMode = 'cpu';
+    let gameMode = 'cpu', peer, conn, myTeam = 'player';
     const container = document.getElementById('game-container');
     const music = document.getElementById('bg-music');
 
+    // Multiplayer Logic
     window.onload = () => {
         const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.has('gameId')) {
-            document.getElementById('status').innerText = "JOINED 2-PLAYER SESSION";
-            startGame('pvp');
+        const gameId = urlParams.get('gameId');
+
+        if (gameId) {
+            myTeam = 'enemy'; // If joining, you are the "top" player (enemy)
+            peer = new Peer();
+            peer.on('open', () => {
+                conn = peer.connect(gameId);
+                setupConn();
+                document.getElementById('status').innerText = "CONNECTING TO HOST...";
+            });
         }
     };
 
     function sendGmailInvite() {
         const gameId = Math.random().toString(36).substring(7);
-        const inviteLink = window.location.origin + window.location.pathname + '?gameId=' + gameId;
-        const subject = encodeURIComponent("Challenge: Join my Mini Royale Battle!");
-        const body = encodeURIComponent("Click this link to join my game session: " + inviteLink);
-        window.open(`https://mail.google.com/mail/?view=cm&fs=1&su=${subject}&body=${body}`, '_blank');
+        peer = new Peer(gameId);
+        
+        peer.on('open', (id) => {
+            const inviteLink = window.location.origin + window.location.pathname + '?gameId=' + id;
+            const subject = encodeURIComponent("Join my Mini Royale Battle!");
+            const body = encodeURIComponent("Click here to play: " + inviteLink);
+            window.open(`https://mail.google.com/mail/?view=cm&fs=1&su=${subject}&body=${body}`, '_blank');
+            document.getElementById('status').innerText = "WAITING FOR CHALLENGER...";
+        });
+
+        peer.on('connection', (c) => {
+            conn = c;
+            setupConn();
+            conn.on('open', () => {
+                conn.send({ type: 'START' });
+                startGame('pvp');
+            });
+        });
+    }
+
+    function setupConn() {
+        conn.on('data', (data) => {
+            if (data.type === 'START') startGame('pvp');
+            if (data.type === 'DEPLOY') {
+                const mirroredY = 550 - data.y; // Flip Y for the other player
+                if (CARDS[data.name].type === 'spell') castSpell(data.name, data.x, mirroredY, data.team, true);
+                else handleMultiSpawn(data.name, data.x, mirroredY, data.team, true);
+            }
+        });
     }
 
     function startGame(mode) {
@@ -143,15 +175,26 @@
         if (!selectedCard) return;
         const rect = container.getBoundingClientRect();
         const x = event.clientX - rect.left - 15, y = event.clientY - rect.top - 15;
-        if (CARDS[selectedCard].type === 'spell') castSpell(selectedCard, x, y, 'player');
-        else { if (y < 270) return; handleMultiSpawn(selectedCard, x, y, 'player'); }
+        
+        // Multiplayer Sync
+        if (conn && conn.open) {
+            conn.send({ type: 'DEPLOY', name: selectedCard, x: x, y: y, team: myTeam });
+        }
+
+        if (CARDS[selectedCard].type === 'spell') castSpell(selectedCard, x, y, myTeam);
+        else { 
+            // Restrict spawn area for PvP unless it's a spell
+            if (myTeam === 'player' && y < 270) return;
+            if (myTeam === 'enemy' && y > 270) return;
+            handleMultiSpawn(selectedCard, x, y, myTeam); 
+        }
         selectedCard = null;
         document.querySelectorAll('.card').forEach(c => c.classList.remove('active-selection'));
     }
 
-    function castSpell(name, x, y, team) {
+    function castSpell(name, x, y, team, isRemote = false) {
         const stats = CARDS[name];
-        if (team === 'player') { elixir -= stats.cost; updateUI(); }
+        if (!isRemote) { elixir -= stats.cost; updateUI(); }
         const explode = document.createElement('div');
         explode.className = 'explosion'; explode.style.left = x + 'px'; explode.style.top = y + 'px';
         container.appendChild(explode);
@@ -171,9 +214,9 @@
         }
     }
 
-    function handleMultiSpawn(name, x, y, team, isFree = false) {
+    function handleMultiSpawn(name, x, y, team, isRemote = false) {
         const stats = CARDS[name];
-        if (team === 'player' && !isFree) { elixir -= stats.cost; updateUI(); }
+        if (!isRemote) { elixir -= stats.cost; updateUI(); }
         const count = stats.spawnCount || 1;
         for (let i = 0; i < count; i++) {
             let spawnX = x, spawnY = y;
@@ -199,7 +242,7 @@
         const stats = CARDS[rand];
         if (cpuElixir >= stats.cost) {
             cpuElixir -= stats.cost;
-            if (stats.type === 'spell') castSpell(rand, 180 + (Math.random()-0.5)*100, 400 + (Math.random()-0.5)*50, 'enemy');
+            if (stats.type === 'spell') castSpell(rand, 180 + (Math.random()-0.5)*100, 400 + (Math.random()-0.5)*50, 'enemy', true);
             else handleMultiSpawn(rand, Math.random()*300, 100, 'enemy', true);
         }
     }
@@ -240,12 +283,11 @@
             }
             u.el.style.left = u.x + 'px'; u.el.style.top = u.y + 'px';
         });
-        
         entities = entities.filter(u => {
             if (u.hp <= 0) {
                 if (u.onDeath === 'spawnBrawler') deploy('Brawler', u.x, u.y, u.team);
                 u.el.remove();
-                if (u.isKing) { alert(u.team === 'player' ? "DEFEAT" : "VICTORY"); location.reload(); }
+                if (u.isKing) { alert(u.team === myTeam ? "DEFEAT" : "VICTORY"); location.reload(); }
                 return false;
             }
             return true;
