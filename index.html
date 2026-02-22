@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Mini Royale: Visible Costs</title>
+    <title>Mini Royale: The Log Rolls</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         :root { --elixir: #f0f; --hp-player: #2ecc71; --hp-enemy: #e74c3c; --selected: #ffeb3b; }
@@ -28,6 +28,9 @@
         .tower { width: 45px; height: 45px; background: #7f8c8d; border: 3px solid #222; border-radius: 5px; z-index: 5; }
         .king-tower { width: 55px; height: 55px; background: #34495e; }
 
+        /* The Log Visual */
+        .log-projectile { font-size: 24px; transition: transform 0.1s linear; z-index: 15; }
+
         .explosion { position: absolute; width: 80px; height: 80px; background: radial-gradient(circle, #4caf50, transparent); border-radius: 50%; transform: translate(-25px, -25px); z-index: 20; animation: burst 0.4s ease-out forwards; }
         @keyframes burst { 0% { transform: scale(0.1); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
 
@@ -36,7 +39,6 @@
         .card { position: relative; background: #eee; color: #111; padding: 5px; font-size: 10px; text-align: center; cursor: pointer; border-radius: 4px; font-weight: bold; border: 2px solid transparent; }
         .card.active-selection { border-color: var(--selected); background: #fff; }
         
-        /* Elixir Cost Badge */
         .cost-badge { position: absolute; top: -5px; right: -5px; background: var(--elixir); color: white; border-radius: 50%; width: 16px; height: 16px; font-size: 9px; display: flex; align-items: center; justify-content: center; border: 1px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
         
         button { padding: 12px 24px; font-weight: bold; cursor: pointer; background: #e67e22; border: none; color: white; border-radius: 5px; margin: 10px; width: 220px;}
@@ -75,7 +77,7 @@
         'Skarmy': { cost: 3, hp: 60, dmg: 20, icon: '💀', speed: 2, range: 20, spawnCount: 6, spawnType: 'cluster' },
         'Mega Knight': { cost: 7, hp: 2500, dmg: 150, icon: '🛡️', speed: 1, range: 35 },
         'Hog Rider': { cost: 4, hp: 1400, dmg: 250, icon: '🐗', speed: 3.5, range: 30, targetsOnlyBuildings: true },
-        'The Log': { cost: 7, hp: 999, dmg: 400, icon: '🪵', speed: 5, range: 400, type: 'spell' },
+        'The Log': { cost: 2, dmg: 250, icon: '🪵', type: 'spell', special: 'rollingLog' },
         'Goblin Barrel': { cost: 3, dmg: 100, icon: '🎭', type: 'spell', special: 'spawnGoblins' },
         'Wizard': { cost: 5, hp: 650, dmg: 140, icon: '🔥', speed: 1.5, range: 120, isSplash: true },
         'Witch': { cost: 5, hp: 750, dmg: 90, icon: '🧙‍♀️', speed: 1.5, range: 90, isSplash: true, special: 'skeleton' },
@@ -88,7 +90,7 @@
         'Brawler': { hp: 1200, dmg: 220, icon: '👹', speed: 2.8, range: 35, cssClass: 'brawler-unit' }
     };
 
-    let elixir = 0, cpuElixir = 0, entities = [], selectedCard = null;
+    let elixir = 0, cpuElixir = 0, entities = [], projectiles = [], selectedCard = null;
     let gameMode = 'cpu', peer, conn, myTeam = 'player';
     const container = document.getElementById('game-container');
     const music = document.getElementById('bg-music');
@@ -96,14 +98,13 @@
     window.onload = () => {
         const urlParams = new URLSearchParams(window.location.search);
         const gameId = urlParams.get('gameId');
-
         if (gameId) {
             myTeam = 'enemy';
             peer = new Peer();
             peer.on('open', () => {
                 conn = peer.connect(gameId);
                 setupConn();
-                document.getElementById('status').innerText = "CONNECTING TO HOST...";
+                document.getElementById('status').innerText = "CONNECTING...";
             });
         }
     };
@@ -111,22 +112,14 @@
     function sendGmailInvite() {
         const gameId = Math.random().toString(36).substring(7);
         peer = new Peer(gameId);
-        
         peer.on('open', (id) => {
             const inviteLink = window.location.origin + window.location.pathname + '?gameId=' + id;
-            const subject = encodeURIComponent("Join my Mini Royale Battle!");
-            const body = encodeURIComponent("Click here to play: " + inviteLink);
-            window.open(`https://mail.google.com/mail/?view=cm&fs=1&su=${subject}&body=${body}`, '_blank');
-            document.getElementById('status').innerText = "WAITING FOR CHALLENGER...";
+            window.open(`https://mail.google.com/mail/?view=cm&fs=1&su=Join Battle&body=${inviteLink}`, '_blank');
+            document.getElementById('status').innerText = "WAITING...";
         });
-
         peer.on('connection', (c) => {
-            conn = c;
-            setupConn();
-            conn.on('open', () => {
-                conn.send({ type: 'START' });
-                startGame('pvp');
-            });
+            conn = c; setupConn();
+            conn.on('open', () => { conn.send({ type: 'START' }); startGame('pvp'); });
         });
     }
 
@@ -146,8 +139,7 @@
         document.getElementById('menu').classList.add('hidden');
         container.className = document.getElementById('arena-choice').value;
         music.play();
-        spawnTowers();
-        renderDeck();
+        spawnTowers(); renderDeck();
         setInterval(updateLogic, 100);
         setInterval(() => { if(elixir < 10) elixir++; if(cpuElixir < 10) cpuElixir++; updateUI(); }, 2000);
         setInterval(witchSpawnCycle, 15000);
@@ -161,60 +153,45 @@
             if (hiddenUnits.includes(name)) return;
             const btn = document.createElement('div');
             btn.className = 'card'; btn.id = `card-${name}`;
-            btn.innerHTML = `
-                <div class="cost-badge">${CARDS[name].cost}</div>
-                ${CARDS[name].icon}<br>${name}
-            `;
+            btn.innerHTML = `<div class="cost-badge">${CARDS[name].cost}</div>${CARDS[name].icon}<br>${name}`;
             btn.onclick = (e) => { e.stopPropagation(); selectCard(name); };
             grid.appendChild(btn);
         });
     }
 
-    function selectCard(name) {
-        if (elixir < CARDS[name].cost) return;
-        selectedCard = name;
-        document.querySelectorAll('.card').forEach(c => c.classList.remove('active-selection'));
-        document.getElementById(`card-${name}`).classList.add('active-selection');
-    }
+    function selectCard(name) { if (elixir >= CARDS[name].cost) selectedCard = name; updateUI(); }
 
     function handleArenaClick(event) {
         if (!selectedCard) return;
         const rect = container.getBoundingClientRect();
         const x = event.clientX - rect.left - 15, y = event.clientY - rect.top - 15;
-        
-        if (conn && conn.open) {
-            conn.send({ type: 'DEPLOY', name: selectedCard, x: x, y: y, team: myTeam });
-        }
-
+        if (conn && conn.open) conn.send({ type: 'DEPLOY', name: selectedCard, x: x, y: y, team: myTeam });
         if (CARDS[selectedCard].type === 'spell') castSpell(selectedCard, x, y, myTeam);
-        else { 
-            if (myTeam === 'player' && y < 270) return;
-            if (myTeam === 'enemy' && y > 270) return;
-            handleMultiSpawn(selectedCard, x, y, myTeam); 
-        }
+        else { if ((myTeam === 'player' && y < 270) || (myTeam === 'enemy' && y > 270)) return; handleMultiSpawn(selectedCard, x, y, myTeam); }
         selectedCard = null;
-        document.querySelectorAll('.card').forEach(c => c.classList.remove('active-selection'));
     }
 
     function castSpell(name, x, y, team, isRemote = false) {
         const stats = CARDS[name];
         if (!isRemote) { elixir -= stats.cost; updateUI(); }
-        const explode = document.createElement('div');
-        explode.className = 'explosion'; explode.style.left = x + 'px'; explode.style.top = y + 'px';
-        container.appendChild(explode);
-        setTimeout(() => explode.remove(), 400);
-
-        entities.forEach(target => {
-            if (target.team !== team && target.hp > 0) {
-                if (Math.hypot(x - target.x, y - target.y) < 60) {
-                    target.hp -= stats.dmg;
-                    const fill = target.el.querySelector('.hp-fill');
-                    if (fill) fill.style.width = (target.hp / target.maxHp * 100) + '%';
-                }
+        
+        if (stats.special === 'rollingLog') {
+            const logDiv = document.createElement('div');
+            logDiv.className = 'entity log-projectile';
+            logDiv.innerHTML = stats.icon;
+            container.appendChild(logDiv);
+            projectiles.push({ el: logDiv, x: x, y: y, dmg: stats.dmg, team: team, dy: (team === 'player' ? -6 : 6), life: 60 });
+        } else {
+            const explode = document.createElement('div');
+            explode.className = 'explosion'; explode.style.left = x + 'px'; explode.style.top = y + 'px';
+            container.appendChild(explode);
+            setTimeout(() => explode.remove(), 400);
+            entities.forEach(t => {
+                if (t.team !== team && Math.hypot(x - t.x, y - t.y) < 60) applyDamage(t, stats.dmg);
+            });
+            if (stats.special === 'spawnGoblins') {
+                for(let i=0; i<3; i++) deploy('Goblin', x + (Math.random()-0.5)*30, y + (Math.random()-0.5)*30, team);
             }
-        });
-        if (stats.special === 'spawnGoblins') {
-            for(let i=0; i<3; i++) deploy('Goblin', x + (Math.random()-0.5)*30, y + (Math.random()-0.5)*30, team);
         }
     }
 
@@ -223,10 +200,10 @@
         if (!isRemote) { elixir -= stats.cost; updateUI(); }
         const count = stats.spawnCount || 1;
         for (let i = 0; i < count; i++) {
-            let spawnX = x, spawnY = y;
-            if (stats.spawnType === 'row') { spawnX = 30 + (i * 50); spawnY = y; }
-            else { spawnX = x + (Math.random()-0.5)*40; spawnY = y + (Math.random()-0.5)*40; }
-            deploy(name, spawnX, spawnY, team);
+            let sX = x, sY = y;
+            if (stats.spawnType === 'row') { sX = 30 + (i * 50); }
+            else { sX += (Math.random()-0.5)*40; sY += (Math.random()-0.5)*40; }
+            deploy(name, sX, sY, team);
         }
     }
 
@@ -240,18 +217,26 @@
         entities.push({ ...stats, el: div, maxHp: stats.hp, team: team, x: x, y: y });
     }
 
-    function cpuTurn() {
-        const names = Object.keys(CARDS).filter(n => !['Goblin', 'Brawler'].includes(n));
-        const rand = names[Math.floor(Math.random() * names.length)];
-        const stats = CARDS[rand];
-        if (cpuElixir >= stats.cost) {
-            cpuElixir -= stats.cost;
-            if (stats.type === 'spell') castSpell(rand, 180 + (Math.random()-0.5)*100, 400 + (Math.random()-0.5)*50, 'enemy', true);
-            else handleMultiSpawn(rand, Math.random()*300, 100, 'enemy', true);
-        }
+    function applyDamage(target, dmg) {
+        target.hp -= dmg;
+        const fill = target.el.querySelector('.hp-fill');
+        if (fill) fill.style.width = (Math.max(0, target.hp) / target.maxHp * 100) + '%';
     }
 
     function updateLogic() {
+        // Projectile Logic (The Log)
+        projectiles = projectiles.filter(p => {
+            p.y += p.dy;
+            p.el.style.left = p.x + 'px'; p.el.style.top = p.y + 'px';
+            entities.forEach(t => {
+                if (t.team !== p.team && Math.hypot(p.x - t.x, p.y - t.y) < 30) applyDamage(t, p.dmg / 5);
+            });
+            p.life--;
+            if (p.life <= 0) { p.el.remove(); return false; }
+            return true;
+        });
+
+        // Troop Logic
         entities.forEach(u => {
             if (u.hp <= 0) return;
             let target = null, minDist = 9999;
@@ -269,33 +254,32 @@
                         u.x += Math.cos(angle) * u.speed; u.y += Math.sin(angle) * u.speed;
                     }
                 } else {
-                    const damageDeal = u.dmg / 10;
                     if (u.isSplash) {
-                        entities.forEach(e => {
-                            if (e.team !== u.team && Math.hypot(target.x - e.x, target.y - e.y) < 50) {
-                                e.hp -= damageDeal;
-                                const fill = e.el.querySelector('.hp-fill');
-                                if (fill) fill.style.width = (e.hp / e.maxHp * 100) + '%';
-                            }
-                        });
-                    } else {
-                        target.hp -= damageDeal;
-                        const fill = target.el.querySelector('.hp-fill');
-                        if (fill) fill.style.width = (target.hp / target.maxHp * 100) + '%';
-                    }
+                        entities.forEach(e => { if (e.team !== u.team && Math.hypot(target.x - e.x, target.y - e.y) < 50) applyDamage(e, u.dmg/10); });
+                    } else applyDamage(target, u.dmg/10);
                 }
             }
             u.el.style.left = u.x + 'px'; u.el.style.top = u.y + 'px';
         });
+        
         entities = entities.filter(u => {
             if (u.hp <= 0) {
                 if (u.onDeath === 'spawnBrawler') deploy('Brawler', u.x, u.y, u.team);
                 u.el.remove();
                 if (u.isKing) { alert(u.team === myTeam ? "DEFEAT" : "VICTORY"); location.reload(); }
                 return false;
-            }
-            return true;
+            } return true;
         });
+    }
+
+    function cpuTurn() {
+        const names = Object.keys(CARDS).filter(n => !['Goblin', 'Brawler'].includes(n));
+        const rand = names[Math.floor(Math.random() * names.length)];
+        if (cpuElixir >= CARDS[rand].cost) {
+            cpuElixir -= CARDS[rand].cost;
+            if (CARDS[rand].type === 'spell') castSpell(rand, 180 + (Math.random()-0.5)*100, 100, 'enemy', true);
+            else handleMultiSpawn(rand, Math.random()*300, 100, 'enemy', true);
+        }
     }
 
     function spawnTowers() {
@@ -311,13 +295,12 @@
         });
     }
 
-    function witchSpawnCycle() {
-        entities.forEach(u => { if (u.special === 'skeleton' && u.hp > 0) handleMultiSpawn('Skarmy', u.x, u.y+20, u.team, true); });
-    }
-
+    function witchSpawnCycle() { entities.forEach(u => { if (u.special === 'skeleton' && u.hp > 0) handleMultiSpawn('Skarmy', u.x, u.y+20, u.team, true); }); }
     function updateUI() {
         document.getElementById('elixir-stat').innerText = `Elixir: ${elixir}/10`;
         document.getElementById('elixir-bar').style.width = (elixir * 10) + '%';
+        document.querySelectorAll('.card').forEach(c => c.classList.remove('active-selection'));
+        if (selectedCard) document.getElementById(`card-${selectedCard}`).classList.add('active-selection');
     }
 </script>
 </body>
