@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Mini Royale: The Log Rolls</title>
+    <title>Mini Royale: Skarmy Buff</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         :root { --elixir: #f0f; --hp-player: #2ecc71; --hp-enemy: #e74c3c; --selected: #ffeb3b; }
@@ -28,7 +28,6 @@
         .tower { width: 45px; height: 45px; background: #7f8c8d; border: 3px solid #222; border-radius: 5px; z-index: 5; }
         .king-tower { width: 55px; height: 55px; background: #34495e; }
 
-        /* The Log Visual */
         .log-projectile { font-size: 24px; transition: transform 0.1s linear; z-index: 15; }
 
         .explosion { position: absolute; width: 80px; height: 80px; background: radial-gradient(circle, #4caf50, transparent); border-radius: 50%; transform: translate(-25px, -25px); z-index: 20; animation: burst 0.4s ease-out forwards; }
@@ -74,20 +73,20 @@
 
 <script>
     const CARDS = {
-        'Skarmy': { cost: 3, hp: 60, dmg: 20, icon: '💀', speed: 2, range: 20, spawnCount: 6, spawnType: 'cluster' },
-        'Mega Knight': { cost: 7, hp: 2500, dmg: 150, icon: '🛡️', speed: 1, range: 35 },
-        'Hog Rider': { cost: 4, hp: 1400, dmg: 250, icon: '🐗', speed: 3.5, range: 30, targetsOnlyBuildings: true },
+        'Skarmy': { cost: 3, hp: 120, dmg: 40, icon: '💀', speed: 3.5, range: 20, spawnCount: 6, spawnType: 'cluster', attackSpeed: 2 },
+        'Mega Knight': { cost: 7, hp: 2500, dmg: 150, icon: '🛡️', speed: 1, range: 35, attackSpeed: 1 },
+        'Hog Rider': { cost: 4, hp: 1400, dmg: 250, icon: '🐗', speed: 3.5, range: 30, targetsOnlyBuildings: true, attackSpeed: 1 },
         'The Log': { cost: 2, dmg: 250, icon: '🪵', type: 'spell', special: 'rollingLog' },
         'Goblin Barrel': { cost: 3, dmg: 100, icon: '🎭', type: 'spell', special: 'spawnGoblins' },
-        'Wizard': { cost: 5, hp: 650, dmg: 140, icon: '🔥', speed: 1.5, range: 120, isSplash: true },
-        'Witch': { cost: 5, hp: 750, dmg: 90, icon: '🧙‍♀️', speed: 1.5, range: 90, isSplash: true, special: 'skeleton' },
-        'Mini P.E.K.K.A': { cost: 4, hp: 1100, dmg: 600, icon: '🤖', speed: 2.5, range: 30 },
-        'P.E.K.K.A': { cost: 7, hp: 3200, dmg: 900, icon: '🦾', speed: 1, range: 35 },
+        'Wizard': { cost: 5, hp: 650, dmg: 140, icon: '🔥', speed: 1.5, range: 120, isSplash: true, attackSpeed: 1 },
+        'Witch': { cost: 5, hp: 750, dmg: 90, icon: '🧙‍♀️', speed: 1.5, range: 90, isSplash: true, special: 'skeleton', attackSpeed: 1 },
+        'Mini P.E.K.K.A': { cost: 4, hp: 1100, dmg: 600, icon: '🤖', speed: 2.5, range: 30, attackSpeed: 1 },
+        'P.E.K.K.A': { cost: 7, hp: 3200, dmg: 900, icon: '🦾', speed: 1, range: 35, attackSpeed: 1 },
         'Goblin Cage': { cost: 4, hp: 800, dmg: 0, icon: '🛖', speed: 0, range: 0, type: 'building', isBuilding: true, onDeath: 'spawnBrawler' },
-        'Royal Recruits': { cost: 7, hp: 700, dmg: 80, icon: '💂', speed: 1, range: 30, spawnCount: 7, spawnType: 'row' },
+        'Royal Recruits': { cost: 7, hp: 700, dmg: 80, icon: '💂', speed: 1, range: 30, spawnCount: 7, spawnType: 'row', attackSpeed: 1 },
         'Fireball': { cost: 4, dmg: 700, icon: '☄️', type: 'spell' },
-        'Goblin': { hp: 160, dmg: 60, icon: '👺', speed: 3, range: 20 },
-        'Brawler': { hp: 1200, dmg: 220, icon: '👹', speed: 2.8, range: 35, cssClass: 'brawler-unit' }
+        'Goblin': { hp: 160, dmg: 60, icon: '👺', speed: 3, range: 20, attackSpeed: 1 },
+        'Brawler': { hp: 1200, dmg: 220, icon: '👹', speed: 2.8, range: 35, cssClass: 'brawler-unit', attackSpeed: 1 }
     };
 
     let elixir = 0, cpuElixir = 0, entities = [], projectiles = [], selectedCard = null;
@@ -224,7 +223,6 @@
     }
 
     function updateLogic() {
-        // Projectile Logic (The Log)
         projectiles = projectiles.filter(p => {
             p.y += p.dy;
             p.el.style.left = p.x + 'px'; p.el.style.top = p.y + 'px';
@@ -236,7 +234,6 @@
             return true;
         });
 
-        // Troop Logic
         entities.forEach(u => {
             if (u.hp <= 0) return;
             let target = null, minDist = 9999;
@@ -254,9 +251,10 @@
                         u.x += Math.cos(angle) * u.speed; u.y += Math.sin(angle) * u.speed;
                     }
                 } else {
+                    const atkSpdMult = u.attackSpeed || 1;
                     if (u.isSplash) {
-                        entities.forEach(e => { if (e.team !== u.team && Math.hypot(target.x - e.x, target.y - e.y) < 50) applyDamage(e, u.dmg/10); });
-                    } else applyDamage(target, u.dmg/10);
+                        entities.forEach(e => { if (e.team !== u.team && Math.hypot(target.x - e.x, target.y - e.y) < 50) applyDamage(e, (u.dmg/10) * atkSpdMult); });
+                    } else applyDamage(target, (u.dmg/10) * atkSpdMult);
                 }
             }
             u.el.style.left = u.x + 'px'; u.el.style.top = u.y + 'px';
